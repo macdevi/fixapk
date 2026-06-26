@@ -1,0 +1,103 @@
+name: Build Fixed APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare source
+        run: |
+          echo "Isi repo:"
+          ls -lah
+
+          mkdir -p /tmp/apk_source
+          ROOT_ZIP=$(ls *.zip | head -n 1)
+
+          echo "ZIP utama: $ROOT_ZIP"
+          unzip -q "$ROOT_ZIP" -d /tmp/apk_source
+
+          echo "Cari ZIP di dalamnya kalau ada..."
+          INNER_ZIP=$(find /tmp/apk_source -name "*.zip" | head -n 1 || true)
+
+          if [ -n "$INNER_ZIP" ]; then
+            echo "ZIP dalam ditemukan: $INNER_ZIP"
+            mkdir -p /tmp/apk_inner
+            unzip -q "$INNER_ZIP" -d /tmp/apk_inner
+            PROJECT_ROOT="/tmp/apk_inner"
+          else
+            PROJECT_ROOT="/tmp/apk_source"
+          fi
+
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> $GITHUB_ENV
+          echo "Hasil extract:"
+          find "$PROJECT_ROOT" -maxdepth 4 -type f | head -n 80
+
+      - name: Find Android project
+        run: |
+          PROJECT_DIR=$(find "$PROJECT_ROOT" \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1 | xargs dirname)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "Android project tidak ditemukan"
+            find "$PROJECT_ROOT" -maxdepth 5 -type f
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          echo "Android project ditemukan di: $PROJECT_DIR"
+          ls -lah "$PROJECT_DIR"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Build debug APK
+        run: |
+          cd "$PROJECT_DIR"
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          else
+            gradle :app:assembleDebug --no-daemon --stacktrace
+          fi
+
+      - name: Prepare APK artifact
+        run: |
+          mkdir -p output
+          APK_FILE=$(find "$PROJECT_DIR/app/build/outputs/apk/debug" -name "*.apk" | head -n 1)
+
+          if [ -z "$APK_FILE" ]; then
+            echo "APK tidak ditemukan"
+            find "$PROJECT_DIR/app/build" -type f | head -n 100
+            exit 1
+          fi
+
+          cp "$APK_FILE" output/MAC-Billing-Fixed.apk
+          ls -lh output
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MAC-Billing-Fixed-APK
+          path: output/MAC-Billing-Fixed.apk
